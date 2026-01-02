@@ -2,18 +2,24 @@ import os
 import time
 import json
 import requests
+import zipfile
+import io
+import shutil
 from DrissionPage import ChromiumPage, ChromiumOptions
 
-def download_silk_extension():
+def download_and_extract_silk_extension():
     """
-    自动下载 Silk - Privacy Pass Client 插件
+    自动下载并解压 Silk 插件
+    返回: 解压后的文件夹绝对路径
     """
     extension_id = "ajhmfdgkijocedmfjonnpjfojldioehi"
     crx_path = "silk.crx"
+    extract_dir = "silk_ext"
     
-    # 如果文件已存在，跳过下载
-    if os.path.exists(crx_path):
-        return os.path.abspath(crx_path)
+    # 如果解压目录已存在且不为空，直接返回
+    if os.path.exists(extract_dir) and os.listdir(extract_dir):
+        print(f">>> [系统] 检测到插件已存在: {extract_dir}")
+        return os.path.abspath(extract_dir)
         
     print(">>> [系统] 正在下载 Silk 隐私插件...")
     headers = {
@@ -25,15 +31,33 @@ def download_silk_extension():
     try:
         resp = requests.get(download_url, headers=headers, stream=True)
         if resp.status_code == 200:
+            # 1. 保存 CRX 文件
             with open(crx_path, 'wb') as f:
-                f.write(resp.content)
-            print(">>> [系统] 插件下载成功！")
-            return os.path.abspath(crx_path)
+                content = resp.content
+                f.write(content)
+            
+            print(">>> [系统] 下载完成，正在解压 CRX...")
+            
+            # 2. 解压 CRX (CRX 本质是 Zip，但前面有头信息，需要跳过)
+            # 寻找 Zip 文件头 PK\x03\x04
+            zip_start = content.find(b'PK\x03\x04')
+            if zip_start == -1:
+                print("❌ 错误：下载的文件不是有效的 CRX/Zip 格式")
+                return None
+                
+            # 解析 Zip 数据
+            with zipfile.ZipFile(io.BytesIO(content[zip_start:])) as zf:
+                if not os.path.exists(extract_dir):
+                    os.makedirs(extract_dir)
+                zf.extractall(extract_dir)
+                
+            print(f">>> [系统] 插件解压成功: {os.path.abspath(extract_dir)}")
+            return os.path.abspath(extract_dir)
         else:
             print(f"⚠️ 插件下载失败，状态码: {resp.status_code}")
             return None
     except Exception as e:
-        print(f"⚠️ 插件下载出错: {e}")
+        print(f"⚠️ 插件处理出错: {e}")
         return None
 
 def wait_for_cloudflare_auto_solve(page, timeout=20):
@@ -51,7 +75,7 @@ def wait_for_cloudflare_auto_solve(page, timeout=20):
             print("--- [插件] 检测到 Cloudflare 已消失！ ---")
             return True
         
-        # 如果插件没反应，尝试手动点一下 iframe 激活它
+        # 尝试辅助激活插件
         try:
             iframe = page.get_frame('@src^https://challenges.cloudflare.com')
             if iframe:
@@ -85,8 +109,8 @@ def find_element_robust(page, selectors, timeout=15):
     return None
 
 def job():
-    # --- 1. 下载插件 ---
-    extension_path = download_silk_extension()
+    # --- 1. 下载并解压插件 ---
+    extension_path = download_and_extract_silk_extension()
     
     # --- 2. 浏览器配置 ---
     co = ChromiumOptions()
@@ -98,14 +122,15 @@ def job():
     co.set_argument('--window-size=1920,1080')
     co.set_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
     
-    # 【核心】挂载插件
+    # 【核心】挂载解压后的插件文件夹
     if extension_path:
         co.add_extension(extension_path)
+    else:
+        print("⚠️ 警告：插件获取失败，将以无插件模式运行（可能无法过盾）")
     
     co.auto_port() 
     page = ChromiumPage(co)
     
-    # 设置超时 (修正版写法)
     try:
         page.set.timeouts(20)
     except:
@@ -223,7 +248,7 @@ def job():
             
             # ==================== 步骤 7: 弹窗 ====================
             print(">>> [7/7] 处理弹窗...")
-            # 这里的盾也会被插件自动秒杀，我们只需要等
+            # 这里的盾也会被插件自动秒杀
             wait_for_cloudflare_auto_solve(page)
             
             modal = page.ele('css:.modal-content')
@@ -252,3 +277,4 @@ def job():
 
 if __name__ == "__main__":
     job()
+
