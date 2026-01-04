@@ -37,25 +37,46 @@ def wait_for_cloudflare(page, timeout=20):
     print(f"--- [盾] 等待 Cloudflare ({timeout}s)... ---")
     start = time.time()
     while time.time() - start < timeout:
-        # 检测页面标题
         if "just a moment" not in page.title.lower():
-            # 额外检查：如果页面里没有 iframe 验证框了，才算真正过盾
             if not page.ele('@src^https://challenges.cloudflare.com'):
                 print("--- [盾] 通行！ ---")
                 return True
-        
-        # 尝试辅助点击 (包括弹窗里的 iframe)
         try:
             iframe = page.get_frame('@src^https://challenges.cloudflare.com')
-            if iframe: 
-                iframe.ele('tag:body').click(by_js=True)
-                print("--- [盾] 尝试点击验证框... ---")
+            if iframe: iframe.ele('tag:body').click(by_js=True)
         except: pass
         time.sleep(1)
     return False
 
+def robust_click(ele):
+    """
+    【核心函数】多重保障点击逻辑
+    1. 滚动到可见
+    2. 等待可见
+    3. 优先 JS 点击 (无视遮挡/无位置)
+    4. 失败则退回普通点击
+    """
+    try:
+        # 措施1: 滚动到视野中
+        ele.scroll.to_see()
+        time.sleep(0.5)
+        
+        # 措施2: 强制使用 JS 点击 (这是解决 '没有位置或大小' 的关键)
+        print(">>> [动作] 尝试 JS 暴力点击...")
+        ele.click(by_js=True)
+        return True
+    except Exception as e:
+        print(f"⚠️ JS点击失败 ({e})，尝试普通点击...")
+        try:
+            # 措施3: 如果 JS 失败，等待元素在屏幕上完全可见再点
+            ele.wait.displayed(timeout=3)
+            ele.click()
+            return True
+        except Exception as e2:
+            print(f"❌ 点击彻底失败: {e2}")
+            return False
+
 def job():
-    # --- 配置与初始化 ---
     ext_path = download_and_extract_silk_extension()
     co = ChromiumOptions()
     co.set_argument('--headless=new')
@@ -105,49 +126,51 @@ def job():
 
         # ==================== 3. 点击主 Renew 按钮 ====================
         print(">>> [4/5] 寻找主界面 Renew 按钮...")
-        # 查找页面上所有的 Renew 按钮
         renew_btn = page.ele('css:button:contains("Renew")') or \
                     page.ele('xpath://button[contains(text(), "Renew")]') or \
                     page.ele('text:Renew')
         
         if renew_btn:
-            # 确保点击的是服务器操作区的按钮，而不是导航栏的
-            renew_btn.click()
+            robust_click(renew_btn) # 使用增强点击
             print(">>> 已点击主按钮，等待弹窗加载...")
-            time.sleep(3)
+            time.sleep(5) # 多等一会，让弹窗动画跑完
             
-            # ==================== 4. 处理弹窗 (根据截图修复) ====================
+            # ==================== 4. 处理弹窗 (终极防护) ====================
             print(">>> [5/5] 处理续期弹窗...")
             
-            # 1. 弹窗出现后，验证码也会加载，这里必须等待处理
+            # 1. 必须先处理弹窗里的 Cloudflare
             wait_for_cloudflare(page)
             
-            # 2. 定位弹窗
+            # 2. 寻找弹窗
             modal = page.ele('css:.modal-content')
             if modal:
                 print(">>> 检测到弹窗，寻找蓝色确认按钮...")
                 
-                # 【核心修复】精确查找策略：
-                # 策略A: 找类名为 btn-primary (蓝色按钮) 的按钮
-                # 策略B: 找 type="submit" 的按钮
-                # 策略C: 找标签是 button 且文字包含 Renew 的元素
-                # 绝对不找 text:Renew (那个是标题)
+                # 寻找按钮 (尝试多种定位方式)
                 confirm_btn = modal.ele('css:button.btn-primary') or \
                               modal.ele('css:button[type="submit"]') or \
                               modal.ele('xpath:.//button[contains(text(), "Renew")]')
                 
                 if confirm_btn:
                     print(f">>> 找到按钮: {confirm_btn.tag} | 文本: {confirm_btn.text}")
-                    if confirm_btn.states.is_enabled:
-                        confirm_btn.click()
-                        print("🎉🎉🎉 点击确认成功！(请检查是否提示成功)")
+                    
+                    # 措施4: 检查按钮是否可用
+                    if not confirm_btn.states.is_enabled:
+                         print("⚠️ 按钮是灰色的 (Disabled)，可能还未到续期时间。")
+                         # 即使是灰色的，也截个图留证
+                         page.get_screenshot(path='renew_disabled.jpg')
                     else:
-                        print("⚠️ 按钮处于禁用状态 (Disabled)，可能未到续期时间或验证码未通过")
+                        # 【调用核心防护函数】
+                        if robust_click(confirm_btn):
+                            print("🎉🎉🎉 点击确认指令已发送！")
+                            time.sleep(3)
+                            # 截图确认结果
+                            page.get_screenshot(path='success_confirm.jpg')
+                        else:
+                             raise Exception("点击操作最终失败")
                 else:
                     print("❌ 弹窗内未找到可点击的按钮")
-                    # 打印一下弹窗里的按钮信息帮助调试
-                    btns = modal.eles('tag:button')
-                    for b in btns: print(f"DEBUG: Found button: {b.html}")
+                    print(f"DEBUG Modal HTML: {modal.html[:500]}")
             else:
                 print("❌ 未检测到弹窗元素 (.modal-content)")
         else:
