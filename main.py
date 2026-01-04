@@ -39,50 +39,48 @@ def download_and_extract_silk_extension():
         return None
     except: return None
 
-def click_captcha_if_present(context_ele, name=""):
+def handle_captcha(context_ele, name=""):
     """
-    通用验证码处理函数
-    context_ele: 可以是 page（全页）也可以是 modal（弹窗）
+    通用验证码处理器
+    核心逻辑：在 context_ele (页面或弹窗) 里找 iframe，找到了就点，点完死等。
     """
-    # 寻找 iframe
+    # Cloudflare 验证码通常在 iframe 里
     iframe = context_ele.ele('css:iframe[src*="cloudflare"]')
     if not iframe:
         iframe = context_ele.ele('css:iframe[title*="Widget"]')
         
     if iframe:
-        log(f">>> [{name}盾] 发现验证码，尝试点击...")
+        log(f">>> [{name}盾] 👁️ 发现验证码 iframe，准备通过...")
         try:
-            # 点击 iframe 内部的 body
+            # 点击 iframe 内部的 body (触发验证)
             iframe.ele('tag:body', timeout=2).click(by_js=True)
-            log(f">>> [{name}盾] 已点击，等待变绿 (5s)...")
-            time.sleep(5) # 给足时间让它转圈
+            log(f">>> [{name}盾] 👆 已点击验证框，强制等待验证生效 (6s)...")
+            # 这里必须死等，因为这时候页面通常在转圈，脚本不能乱动
+            time.sleep(6) 
             return True
-        except:
+        except Exception as e:
+            log(f"⚠️ [{name}盾] 点击尝试略过: {e}")
             pass
     return False
 
-def ensure_page_access(page):
+def ensure_page_loaded(page):
     """
-    【死磕模式】确保真正进入了页面，而不是停在 Cloudflare 盾上
+    【第一道防线】确保进入了页面，而不是卡在全屏盾上
     """
-    log("--- [门神] 正在检查是否真正进入页面...")
-    for i in range(10): # 最多尝试 10 次检查
+    log("--- [1/2] 检查全屏门神盾...")
+    for i in range(10): 
         title = page.title.lower()
-        
-        # 如果标题包含 just a moment，说明还在盾上
         if "just a moment" in title or "attention" in title:
-            log(f"--- [门神] 还在盾界面 (Just a moment)，尝试破盾... ({i+1}/10)")
-            click_captcha_if_present(page, "全页")
+            log(f"--- 还在全屏盾界面，尝试点击... ({i+1})")
+            handle_captcha(page, "全屏")
             time.sleep(3)
         else:
-            # 检查页面里有没有验证码拦截的文字
-            html = page.html.lower()
-            if "captcha" in html or "challenge" in html:
-                 log(f"--- [门神] 标题正常但内容被拦截，尝试破盾... ({i+1}/10)")
-                 click_captcha_if_present(page, "隐形")
+            # 检查是否有隐形盾文字
+            if "captcha" in page.html.lower():
+                 log(f"--- 标题正常但内容显示拦截，尝试点击... ({i+1})")
+                 handle_captcha(page, "隐形")
                  time.sleep(3)
             else:
-                log("--- [门神] 通行成功！")
                 return True
     return False
 
@@ -96,21 +94,21 @@ def robust_click(ele):
         return False
 
 def check_result(page):
-    log(">>> [检测] 分析结果...")
+    log(">>> [检测] 读取结果回显...")
     time.sleep(2)
     full_text = page.html.lower()
     
     if "captcha" in full_text:
-        log("❌ 结果: 验证码拦截")
+        log("❌ 结果: 依然显示验证码拦截 (可能验证未通过)")
         return "FAIL"
     if "can't renew" in full_text or "too early" in full_text:
-        log("✅ 结果: 还没到时间")
+        log("✅ 结果: 还没到时间 (操作正确)")
         return "SUCCESS"
     if "success" in full_text or "extended" in full_text:
         log("✅ 结果: 续期成功")
         return "SUCCESS"
     
-    log("⚠️ 未捕捉到明确结果")
+    log("⚠️ 未捕捉到明确结果，假定流程完成")
     return "UNKNOWN"
 
 def job():
@@ -125,9 +123,6 @@ def job():
     
     if ext_path: co.add_extension(ext_path)
     co.auto_port()
-    
-    # 恢复正常加载模式，防止漏加载 iframe
-    # co.set_load_mode('normal') 
 
     page = ChromiumPage(co)
     page.set.timeouts(15)
@@ -145,62 +140,63 @@ def job():
         log(">>> [Step 1] 登录...")
         page.get('https://dashboard.katabump.com/auth/login')
         
-        # 确保能看见登录框
-        ensure_page_access(page)
+        # 过第一道盾
+        ensure_page_loaded(page)
         
         if page.ele('css:input[name="email"]'):
             log(">>> 输入账号密码...")
             page.ele('css:input[name="email"]').input(email)
             page.ele('css:input[name="password"]').input(password)
             page.ele('css:button[type="submit"]').click()
-            
-            log(">>> 等待跳转...")
             page.wait.url_change('login', exclude=True, timeout=15)
 
-        # ==================== 2. 循环尝试 (3次) ====================
+        # ==================== 2. 循环尝试 ====================
         for attempt in range(1, 4):
-            log(f"\n🚀 [Step 2] 第 {attempt}/3 次续期尝试...")
+            log(f"\n🚀 [Step 2] 第 {attempt}/3 次尝试...")
             try:
                 page.get(target_url)
                 
-                # 【第一关】进门前，必须把全页盾给破了
-                if not ensure_page_access(page):
-                    log("❌ 无法突破进门盾，重试...")
+                # 【防线1】刚进页面，先看全屏盾
+                if not ensure_page_loaded(page):
+                    log("❌ 全屏盾未过，重试...")
                     continue
                 
-                # 寻找主界面 Renew 按钮
+                # 找主按钮
                 renew_btn = page.ele('css:button:contains("Renew")')
                 if not renew_btn:
-                    log("⚠️ 未找到 Renew 按钮，检查状态...")
+                    log("⚠️ 无 Renew 按钮，检查是否已续期...")
                     if check_result(page) == "SUCCESS": break
                     continue
 
-                # 点击主 Renew
+                # 点击主按钮，呼出弹窗
                 robust_click(renew_btn)
                 
                 # 等待弹窗
-                log(">>> 等待弹窗弹出...")
+                log(">>> 等待弹窗加载...")
                 modal = page.wait.ele_displayed('css:.modal-content', timeout=8)
                 
                 if modal:
-                    # 【第二关 - 核心修复】弹窗里的验证码
-                    # 在点击确认之前，必须先点弹窗里的盾！
-                    log(">>> [流程] 检查弹窗内是否有验证码...")
-                    click_captcha_if_present(modal, "弹窗内")
+                    # 【防线2 - 核心】处理弹窗里的“内鬼”盾
+                    log(">>> [2/2] 正在处理弹窗内的五秒盾...")
                     
-                    # 再次检查，确保它是绿的（有时候需要点两次）
-                    # 这里加一个等待，确保验证生效
+                    # 1. 先找验证码并点击
+                    has_captcha = handle_captcha(modal, "弹窗")
                     
+                    if has_captcha:
+                        log(">>> 验证码已点击，再等 2 秒确保变绿...")
+                        time.sleep(2)
+                    
+                    # 2. 只有处理完验证码，才去找确认按钮
                     confirm = modal.ele('css:button.btn-primary')
                     if confirm:
-                        log(">>> [流程] 验证处理完毕，点击最终确认...")
+                        log(">>> 🛡️ 盾已破，点击最终确认！")
                         robust_click(confirm)
                         
-                        time.sleep(5) # 等待提交结果
+                        time.sleep(5) # 等待服务器反应
                         if check_result(page) == "SUCCESS":
                             break
                     else:
-                        log("⚠️ 确认按钮没找到")
+                        log("⚠️ 没找到确认按钮，可能被盾挡住了")
                 else:
                     log("❌ 弹窗未出现")
             
@@ -208,7 +204,7 @@ def job():
                 log(f"❌ 异常: {e}")
             
             if attempt < 3: 
-                log("⏳ 休息 5 秒...")
+                log("⏳ 冷却 5 秒...")
                 time.sleep(5)
 
         log("\n🏁 脚本运行结束")
