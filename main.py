@@ -43,38 +43,45 @@ def pass_full_page_shield(page):
 
 def pass_modal_captcha(modal):
     """
-    【增强版】处理弹窗验证码
-    现在会扫描所有 iframe，防止漏网之鱼
+    【复选框特化版】
+    根据您的情报，直接寻找 <input type="checkbox">
     """
-    log(">>> [弹窗] 正在深度扫描验证码...")
+    log(">>> [弹窗] 正在寻找 Checkbox...")
     
-    # 1. 尝试精准定位 Cloudflare/Turnstile
-    # 扩大搜索范围，timeout 给足 10秒
-    target_iframe = modal.ele('css:iframe[src*="cloudflare"], iframe[src*="turnstile"]', timeout=10)
+    # 策略 1: 检查 iframe 内部的 input checkbox (最常见的情况)
+    # Cloudflare 通常把 checkbox 藏在 iframe 里
+    iframe = modal.ele('css:iframe[src*="cloudflare"], iframe[src*="turnstile"]', timeout=5)
     
-    # 2. 如果没找到，扫描弹窗内所有 iframe (盲狙)
-    if not target_iframe:
-        log("⚠️ 精准定位失败，尝试扫描弹窗内所有 iframe...")
-        all_iframes = modal.eles('tag:iframe')
-        for frame in all_iframes:
-            # 排除太小的不可见 iframe
-            if frame.states.is_displayed and frame.rect.size[0] > 50:
-                target_iframe = frame
-                break
-    
-    if target_iframe:
-        log(">>> [弹窗] 👁️ 锁定验证码 iframe，准备点击...")
+    if iframe:
+        log(">>> [弹窗] 锁定验证码 iframe，查找内部 checkbox...")
         try:
-            # 点击 body
-            target_iframe.ele('tag:body').click(by_js=True)
-            log(">>> [弹窗] 👆 已点击，强制等待 5 秒 (让它变绿)...")
+            # 在 iframe 内部找 input
+            inner_cb = iframe.ele('css:input[type="checkbox"]', timeout=3)
+            if inner_cb:
+                log(">>> [弹窗] 🎯 找到 iframe 内的复选框，点击！")
+                inner_cb.click(by_js=True)
+            else:
+                log(">>> [弹窗] iframe 内没找到复选框，尝试点击 iframe 中心...")
+                iframe.ele('tag:body').click(by_js=True)
+                
+            log(">>> [弹窗] 已点击，等待 5 秒变绿...")
             time.sleep(5)
             return True
         except Exception as e:
-            log(f"⚠️ 点击失败: {e}")
-    else:
-        log(">>> [弹窗] 实在没找到 iframe (可能真的没有，或者加载失败)")
-    
+            log(f"⚠️ iframe 交互失败: {e}")
+
+    # 策略 2: 如果没 iframe，直接在弹窗里找 checkbox
+    # 有时候验证码脚本直接加载在当前页面
+    direct_cb = modal.ele('css:input[type="checkbox"]', timeout=2)
+    if direct_cb:
+        log(">>> [弹窗] 🎯 在弹窗层级发现复选框，点击！")
+        try:
+            direct_cb.click(by_js=True)
+            time.sleep(5)
+            return True
+        except: pass
+            
+    log(">>> [弹窗] 未能点击到任何复选框")
     return False
 
 def analyze_page_alert(page):
@@ -94,7 +101,7 @@ def analyze_page_alert(page):
             return "SUCCESS_TOO_EARLY"
         elif "captcha" in text.lower():
             log("❌ [失败] 验证码未通过！")
-            return "FAIL_CAPTCHA" # 返回特定错误代码，触发重试
+            return "FAIL_CAPTCHA" # 触发重试
         else:
             return "FAIL_OTHER"
 
@@ -147,7 +154,6 @@ def job():
             page.wait.url_change('login', exclude=True, timeout=20)
         
         # ==================== 重试循环 ====================
-        # 如果遇到验证码错误，最多重试 3 次
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             log(f"\n🚀 [Step 2] 进入服务器页面 (第 {attempt} 次尝试)...")
@@ -157,6 +163,7 @@ def job():
             # 寻找按钮
             renew_btn = None
             for _ in range(5):
+                # 使用 data-bs-target 精准定位
                 renew_btn = page.ele('css:button[data-bs-target="#renew-modal"]')
                 if renew_btn and renew_btn.states.is_displayed: break
                 time.sleep(1)
@@ -167,9 +174,10 @@ def job():
                 
                 modal = page.ele('css:.modal-content', timeout=10)
                 if modal:
-                    # 尝试过盾
+                    # 使用新的 Checkbox 策略
                     pass_modal_captcha(modal)
                     
+                    # 使用 type="submit" 精准定位
                     confirm_btn = modal.ele('css:button[type="submit"].btn-primary')
                     if confirm_btn:
                         log(">>> 点击 Confirm...")
@@ -181,13 +189,13 @@ def job():
                         result = analyze_page_alert(page)
                         
                         if result == "SUCCESS" or result == "SUCCESS_TOO_EARLY":
-                            log("🎉 任务完成，退出循环。")
-                            break # 成功，结束！
+                            log("🎉 任务完成！")
+                            break 
                         
                         if result == "FAIL_CAPTCHA":
-                            log("⚠️ 检测到验证码错误，准备刷新重试...")
+                            log("⚠️ 验证码未点中，准备重试...")
                             time.sleep(3)
-                            continue # 触发下一次循环
+                            continue
                     else:
                         log("❌ 找不到确认按钮")
                 else:
@@ -200,7 +208,6 @@ def job():
                 else:
                     log("❌ 页面加载异常或无按钮")
             
-            # 如果是最后一次还没成功，报错退出
             if attempt == max_retries:
                 log("❌ 已达到最大重试次数，任务失败。")
                 exit(1)
