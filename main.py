@@ -41,47 +41,50 @@ def pass_full_page_shield(page):
             return True
     return False
 
-def pass_modal_captcha(modal):
+def pass_modal_captcha_strict(modal):
     """
-    【复选框特化版】
-    根据您的情报，直接寻找 <input type="checkbox">
+    【严格坐标版】
+    完全按照您提供的 <input type="checkbox"> 进行定位
     """
-    log(">>> [弹窗] 正在寻找 Checkbox...")
+    log(">>> [弹窗] 正在等待验证码加载 (死磕 input[type='checkbox'])...")
     
-    # 策略 1: 检查 iframe 内部的 input checkbox (最常见的情况)
-    # Cloudflare 通常把 checkbox 藏在 iframe 里
-    iframe = modal.ele('css:iframe[src*="cloudflare"], iframe[src*="turnstile"]', timeout=5)
+    # 策略：Cloudflare 的 checkbox 99% 的情况是在 iframe 里的
+    # 我们先找 iframe，再进 iframe 找 checkbox
+    # 给它 10 秒钟加载，因为您说“等几秒正常都加载出来了”
     
-    if iframe:
-        log(">>> [弹窗] 锁定验证码 iframe，查找内部 checkbox...")
-        try:
-            # 在 iframe 内部找 input
-            inner_cb = iframe.ele('css:input[type="checkbox"]', timeout=3)
-            if inner_cb:
-                log(">>> [弹窗] 🎯 找到 iframe 内的复选框，点击！")
-                inner_cb.click(by_js=True)
-            else:
-                log(">>> [弹窗] iframe 内没找到复选框，尝试点击 iframe 中心...")
-                iframe.ele('tag:body').click(by_js=True)
-                
-            log(">>> [弹窗] 已点击，等待 5 秒变绿...")
+    target_iframe = modal.ele('css:iframe[src*="cloudflare"], iframe[src*="turnstile"]', timeout=10)
+    
+    if target_iframe:
+        log(">>> [弹窗] 找到 iframe，正在寻找内部复选框...")
+        # 在 iframe 内部严格寻找 <input type="checkbox">
+        checkbox = target_iframe.ele('css:input[type="checkbox"]', timeout=8)
+        
+        if checkbox:
+            log(">>> [弹窗] 🎯 找到 <input type='checkbox'>，点击！")
+            # 使用 js 点击最稳，防止被上层元素遮挡
+            checkbox.click(by_js=True)
+            log(">>> [弹窗] 已点击，强制等待 5 秒...")
             time.sleep(5)
             return True
-        except Exception as e:
-            log(f"⚠️ iframe 交互失败: {e}")
-
-    # 策略 2: 如果没 iframe，直接在弹窗里找 checkbox
-    # 有时候验证码脚本直接加载在当前页面
-    direct_cb = modal.ele('css:input[type="checkbox"]', timeout=2)
-    if direct_cb:
-        log(">>> [弹窗] 🎯 在弹窗层级发现复选框，点击！")
-        try:
-            direct_cb.click(by_js=True)
+        else:
+            log("⚠️ iframe 里没找到 checkbox (可能加载慢了)")
+            # 兜底：如果实在没找到 checkbox，点 iframe 中心碰运气
+            log(">>> [兜底] 尝试点击 iframe 主体...")
+            target_iframe.ele('tag:body').click(by_js=True)
             time.sleep(5)
             return True
-        except: pass
             
-    log(">>> [弹窗] 未能点击到任何复选框")
+    else:
+        # 如果连 iframe 都没找到，尝试在弹窗直接层级找 checkbox
+        log(">>> [弹窗] 没找到 iframe，尝试直接寻找 checkbox...")
+        checkbox = modal.ele('css:input[type="checkbox"]', timeout=3)
+        if checkbox:
+            log(">>> [弹窗] 🎯 在表单层找到 <input type='checkbox'>，点击！")
+            checkbox.click(by_js=True)
+            time.sleep(5)
+            return True
+
+    log("❌ [弹窗] 超时未找到任何 Checkbox")
     return False
 
 def analyze_page_alert(page):
@@ -163,7 +166,7 @@ def job():
             # 寻找按钮
             renew_btn = None
             for _ in range(5):
-                # 使用 data-bs-target 精准定位
+                # 严格使用您提供的 data-bs-target
                 renew_btn = page.ele('css:button[data-bs-target="#renew-modal"]')
                 if renew_btn and renew_btn.states.is_displayed: break
                 time.sleep(1)
@@ -174,10 +177,10 @@ def job():
                 
                 modal = page.ele('css:.modal-content', timeout=10)
                 if modal:
-                    # 使用新的 Checkbox 策略
-                    pass_modal_captcha(modal)
+                    # 严格执行 Checkbox 点击
+                    pass_modal_captcha_strict(modal)
                     
-                    # 使用 type="submit" 精准定位
+                    # 严格使用您提供的 type="submit"
                     confirm_btn = modal.ele('css:button[type="submit"].btn-primary')
                     if confirm_btn:
                         log(">>> 点击 Confirm...")
@@ -193,7 +196,7 @@ def job():
                             break 
                         
                         if result == "FAIL_CAPTCHA":
-                            log("⚠️ 验证码未点中，准备重试...")
+                            log("⚠️ 验证码点击可能未生效，刷新重试...")
                             time.sleep(3)
                             continue
                     else:
