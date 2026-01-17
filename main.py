@@ -80,7 +80,7 @@ def pass_full_page_shield(page):
             return True
     return False
 
-def manual_click_checkbox(modal):
+def manual_click_checkbox(page, modal):
     """【补刀逻辑】手动点击 checkbox"""
     log(">>> [补刀] 检查是否需要手动点击...")
     
@@ -90,19 +90,19 @@ def manual_click_checkbox(modal):
         checkbox = iframe.ele('css:input[type="checkbox"]', timeout=2)
         if checkbox:
             log(">>> [补刀] 🎯 在 iframe 里点击 Checkbox！")
-            checkbox.click(by_js=True)
+            page.actions.move_to(checkbox).pause(0.5).click(checkbox)
             return True
         else:
             # 没 checkbox 就点 iframe 中心
             log(">>> [补刀] 点击 iframe 主体...")
-            iframe.ele('tag:body').click(by_js=True)
+            page.actions.move_to(iframe).pause(0.5).click(iframe)
             return True
             
     # 2. 外部扫描
     checkbox = modal.ele('css:input[type="checkbox"]', timeout=1)
     if checkbox:
         log(">>> [补刀] 🎯 在外部点击 Checkbox！")
-        checkbox.click(by_js=True)
+        page.actions.move_to(checkbox).pause(0.5).click(checkbox)
         return True
         
     log(">>> [补刀] 未找到元素 (可能插件已完成点击)")
@@ -154,7 +154,8 @@ def job():
     co.set_argument('--disable-gpu')
     co.set_argument('--disable-dev-shm-usage')
     co.set_argument('--window-size=1920,1080')
-    co.set_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
+    # co.set_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
+
     
     # 3. 同时挂载两个插件
     plugin_count = 0
@@ -206,7 +207,7 @@ def job():
 
             if renew_btn:
                 log(">>> 点击 Renew 按钮...")
-                renew_btn.click(by_js=True)
+                page.actions.move_to(renew_btn).pause(0.5).click(renew_btn)
                 
                 log(">>> 等待弹窗...")
                 modal = page.ele('css:.modal-content', timeout=10)
@@ -222,7 +223,7 @@ def job():
                     for _ in range(10):
                         time.sleep(2)
                         # 尝试手动补刀
-                        if manual_click_checkbox(modal):
+                        if manual_click_checkbox(page, modal):
                             log(">>> [验证] 已尝试点击，等待反应...")
                         
                         # 检测是否已成功 (iframe 消失或出现 success 提示)
@@ -238,7 +239,7 @@ def job():
                     confirm_btn = modal.ele('css:button[type="submit"].btn-primary')
                     if confirm_btn:
                         log(">>> 点击 Confirm...")
-                        confirm_btn.click(by_js=True)
+                        page.actions.move_to(confirm_btn).pause(0.5).click(confirm_btn)
                         log(">>> 等待响应 (5s)...")
                         time.sleep(5)
                         
