@@ -5,7 +5,9 @@ import zipfile
 import io
 import datetime
 import re
+import sys
 from DrissionPage import ChromiumPage, ChromiumOptions
+from pyvirtualdisplay import Display
 
 # ==================== 基础工具 ====================
 def log(message):
@@ -137,9 +139,17 @@ def job():
     path_silk = download_silk()
     path_cf = download_cf_autoclick()
     
+    # 1.5 Virtual Display (Linux Only)
+    display = None
+    if sys.platform.startswith('linux'):
+        log(">>> [系统] 检测到 Linux 环境，启动虚拟显示器 (Xvfb)...")
+        display = Display(visible=0, size=(1920, 1080))
+        display.start()
+
     # 2. 配置浏览器
     co = ChromiumOptions()
-    co.set_argument('--headless=new')
+    # co.set_argument('--headless=new') # Cloudflare hates headless
+
     co.set_argument('--no-sandbox')
     co.set_argument('--disable-gpu')
     co.set_argument('--disable-dev-shm-usage')
@@ -207,14 +217,23 @@ def job():
                     # 确保验证码加载，给插件目标
                     page.wait.ele_displayed('css:iframe[src*="cloudflare"], iframe[src*="turnstile"]', timeout=8)
                     
-                    # 1. 插件自动处理时间
-                    time.sleep(10)
-                    
-                    # 2. 脚本手动补刀 (如果插件漏了)
-                    manual_click_checkbox(modal)
+                    # 1. 动态轮询检测验证码 (替代固定等待)
+                    log(">>> [验证] 开始轮询验证码状态 (max 20s)...")
+                    for _ in range(10):
+                        time.sleep(2)
+                        # 尝试手动补刀
+                        if manual_click_checkbox(modal):
+                            log(">>> [验证] 已尝试点击，等待反应...")
+                        
+                        # 检测是否已成功 (iframe 消失或出现 success 提示)
+                        # 这里简单判断: 如果 checkbox 没了，可能已经过了
+                        iframe = modal.ele('css:iframe[src*="cloudflare"], iframe[src*="turnstile"]', timeout=1)
+                        if not iframe:
+                             log(">>> [验证] 验证码框体消失，可能已通过...")
+                             break
                     
                     # 3. 缓冲
-                    time.sleep(3)
+                    time.sleep(2)
                     
                     confirm_btn = modal.ele('css:button[type="submit"].btn-primary')
                     if confirm_btn:
@@ -251,6 +270,8 @@ def job():
         exit(1)
     finally:
         page.quit()
+        if display:
+            display.stop()
 
 if __name__ == "__main__":
     job()
